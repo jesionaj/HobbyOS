@@ -15,264 +15,364 @@ extern List_t* ReadyTasks[ NUM_PRIORITY_LEVELS ];
 
 TEST_GROUP(RTOS)
 {
+    void setup()
+    {
+        RTOS_Initialize();
+    }
 
+    void teardown()
+    {
 
+    }
 
-	void setup()
-	{
-		RTOS_Initialize();
-	}
-	void teardown()
-	{
+    Task_t* makeTask(uint8_t prio)
+    {
+        Task_t* task = (Task_t*)malloc(sizeof(Task_t));
 
-	}
+        task->taskList.next  = NULL;
+        task->taskList.owner = task;
+        task->taskList.prev  = NULL;
 
+        task->sleepTimer = 0;
+        task->priority   = prio;
 
+        return task;
+    }
+
+    void CheckCurrentTask(Task_t* expected)
+    {
+        POINTERS_EQUAL(expected, CurrentTask);
+    }
+
+    void CheckSleepingTasks(Task_t* expected)
+    {
+        if(expected == NULL)
+        {
+            POINTERS_EQUAL(expected, SleepingTasks);
+        }
+        else
+        {
+            CHECK_TRUE(IsNodeInList(&SleepingTasks, &expected->taskList));
+        }
+    }
+
+    // We check the pointers instead of using IsNodeInList as order does matter for ready tasks
+    void CheckReadyTaskFront(Task_t* expected, uintd_t priority)
+    {
+        if(expected == NULL)
+        {
+            POINTERS_EQUAL(expected, ReadyTasks[priority]);
+        }
+        else
+        {
+            POINTERS_EQUAL(&expected->taskList, ReadyTasks[priority]);
+        }
+    }
 
 };
 
+/*
+ * Check that we've initialized as expected.
+ */
 TEST(RTOS, Initialized)
 {
-	int i;
+    int i;
 
-	for(i = 0; i < NUM_PRIORITY_LEVELS; i++)
-	{
-		POINTERS_EQUAL(NULL, ReadyTasks[i]);
-	}
+    for(i = 0; i < NUM_PRIORITY_LEVELS; i++)
+    {
+        POINTERS_EQUAL(NULL, ReadyTasks[i]);
+    }
 
-	POINTERS_EQUAL(&idleTask, CurrentTask);
+    CheckCurrentTask(&idleTask);
 }
 
-TEST(RTOS, AddTask)
+/*
+ * Start one task, doing nothing else.
+ */
+TEST(RTOS, StartSingleTask)
 {
-	Task_t* task = makeTask(1, PRIORITY_1);
+    Task_t* task = makeTask(PRIORITY_1);
 
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
+    POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
 
-	StartTask(task);
+    StartTask(task);
 
-	POINTERS_EQUAL(&task->taskList, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(&idleTask, CurrentTask);
-	POINTERS_EQUAL(NULL, SleepingTasks);
+    CheckReadyTaskFront(task, PRIORITY_1);
+    CheckCurrentTask(&idleTask);
+    CheckSleepingTasks(NULL);
 }
 
+/*
+ * Start a task and tick
+ */
 TEST(RTOS, StartTaskAndTick)
 {
-	Task_t* task = makeTask(1, PRIORITY_1);
+    Task_t* task = makeTask(PRIORITY_1);
 
-	StartTask(task);
-	Tick();
+    StartTask(task);
+    Tick();
 
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(task, CurrentTask);
-	POINTERS_EQUAL(NULL, SleepingTasks);
+    CheckReadyTaskFront(NULL, PRIORITY_1);
+    CheckCurrentTask(task);
+    CheckSleepingTasks(NULL);
 }
 
+/*
+ * Start a task, then delay it.
+ */
 TEST(RTOS, SleepTask)
 {
-	Task_t* task = makeTask(1, PRIORITY_1);
+    Task_t* task = makeTask(PRIORITY_1);
 
-	StartTask(task);
-	Tick();
-	DelayCurrentTask(5);
+    StartTask(task);
+    Tick();
+    DelayCurrentTask(5);
 
-	LONGS_EQUAL(5, task->sleepTimer);
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(&idleTask, CurrentTask);
-	POINTERS_EQUAL(&task->taskList, SleepingTasks);
+    LONGS_EQUAL(5, task->sleepTimer);
+
+    CheckReadyTaskFront(NULL, PRIORITY_1);
+    CheckCurrentTask(&idleTask);
+    CheckSleepingTasks(task);
 }
 
+/*
+ * Start a task, delay it, then tick without waking.
+ */
 TEST(RTOS, SleepTaskAndTickBeforeWake)
 {
-	Task_t* task = makeTask(1, PRIORITY_1);
+    Task_t* task = makeTask(PRIORITY_1);
 
-	StartTask(task);
-	Tick();
-	DelayCurrentTask(2);
-	Tick();
+    StartTask(task);
+    Tick();
+    DelayCurrentTask(2);
+    Tick();
 
+    LONGS_EQUAL(1, task->sleepTimer);
 
-	LONGS_EQUAL(1, task->sleepTimer);
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(&idleTask, CurrentTask);
-	POINTERS_EQUAL(&task->taskList, SleepingTasks);
+    CheckReadyTaskFront(NULL, PRIORITY_1);
+    CheckCurrentTask(&idleTask);
+    CheckSleepingTasks(task);
 }
 
+/*
+ * Start a task, delay it, then tick until it wakes.
+ */
 TEST(RTOS, SleepTaskAndTickReady)
 {
-	Task_t* task = makeTask(1, PRIORITY_1);
+    Task_t* task = makeTask(PRIORITY_1);
 
-	StartTask(task);
-	Tick();
-	DelayCurrentTask(1);
-	Tick();
-	Tick();
+    StartTask(task);
+    Tick();
+    DelayCurrentTask(1);
+    Tick();
+    Tick();
 
+    LONGS_EQUAL(0, task->sleepTimer);
 
-	LONGS_EQUAL(0, task->sleepTimer);
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(task, CurrentTask);
-	POINTERS_EQUAL(NULL, SleepingTasks);
+    CheckReadyTaskFront(NULL, PRIORITY_1);
+    CheckCurrentTask(task);
+    CheckSleepingTasks(NULL);
 }
 
+/*
+ * Start two tasks with different priorities
+ */
 TEST(RTOS, StartTwoTasks)
 {
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	Task_t* task2 = makeTask(2, PRIORITY_2);
+    Task_t* task1 = makeTask(PRIORITY_1);
+    Task_t* task2 = makeTask(PRIORITY_2);
 
-	StartTask(task1);
-	StartTask(task2);
+    StartTask(task1);
+    StartTask(task2);
 
-	POINTERS_EQUAL(&task1->taskList, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(&task2->taskList, ReadyTasks[PRIORITY_2]);
-	POINTERS_EQUAL(&idleTask, CurrentTask);
-	POINTERS_EQUAL(NULL, SleepingTasks);
+    CheckReadyTaskFront(task1, PRIORITY_1);
+    CheckReadyTaskFront(task2, PRIORITY_2);
+    CheckCurrentTask(&idleTask);
+    CheckSleepingTasks(NULL);
 }
 
+/*
+ * Start two tasks with the same priority
+ */
 TEST(RTOS, StartTwoTasksSamePrio)
 {
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	Task_t* task2 = makeTask(2, PRIORITY_1);
+    Task_t* task1 = makeTask(PRIORITY_1);
+    Task_t* task2 = makeTask(PRIORITY_1);
 
-	StartTask(task1);
-	StartTask(task2);
+    StartTask(task1);
+    StartTask(task2);
 
-	POINTERS_EQUAL(&task2->taskList, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(ReadyTasks[PRIORITY_1]->next, &task1->taskList);
-	POINTERS_EQUAL(&idleTask, CurrentTask);
-	POINTERS_EQUAL(NULL, SleepingTasks);
+    CheckReadyTaskFront(task2, PRIORITY_1);
+    POINTERS_EQUAL(ReadyTasks[PRIORITY_1]->next, &task1->taskList);
+
+    CheckCurrentTask(&idleTask);
+    CheckSleepingTasks(NULL);
 }
 
+/*
+ * Start two tasks with the same priority, then tick
+ */
 TEST(RTOS, TwoTasksSamePrioTick)
 {
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	Task_t* task2 = makeTask(2, PRIORITY_1);
+    Task_t* task1 = makeTask(PRIORITY_1);
+    Task_t* task2 = makeTask(PRIORITY_1);
 
-	StartTask(task1);
-	StartTask(task2);
-	Tick();
+    StartTask(task1);
+    StartTask(task2);
+    Tick();
 
-	POINTERS_EQUAL(&task1->taskList, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(task2, CurrentTask);
-	POINTERS_EQUAL(NULL, SleepingTasks);
+    // Task2 was added later, so it should be the one running
+    CheckReadyTaskFront(task1, PRIORITY_1);
+    CheckCurrentTask(task2);
+    CheckSleepingTasks(NULL);
 }
 
+/*
+ * Start two tasks, same priority, sleep one of them.
+ */
 TEST(RTOS, TwoTasksSamePrioTickThenSleep)
 {
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	Task_t* task2 = makeTask(2, PRIORITY_1);
+    Task_t* task1 = makeTask(PRIORITY_1);
+    Task_t* task2 = makeTask(PRIORITY_1);
 
-	StartTask(task1);
-	StartTask(task2);
-	Tick();
-	DelayCurrentTask(2);
+    StartTask(task1);
+    StartTask(task2);
+    Tick();
 
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(task1, CurrentTask);
-	POINTERS_EQUAL(&task2->taskList, SleepingTasks);
+    // Task2 should be running
+    CheckCurrentTask(task2);
+
+    // Let's delay it
+    DelayCurrentTask(2);
+
+    // Now task1 should be running
+    CheckReadyTaskFront(NULL, PRIORITY_1);
+    CheckReadyTaskFront(NULL, PRIORITY_1);
+    CheckCurrentTask(task1);
+    CheckSleepingTasks(task2);
 }
 
+/*
+ * Start two tasks, same priority, sleep one of them, tick until it wakes.
+ */
 TEST(RTOS, TwoTasksSamePrioTickSleepTick)
 {
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	Task_t* task2 = makeTask(2, PRIORITY_1);
+    Task_t* task1 = makeTask(PRIORITY_1);
+    Task_t* task2 = makeTask(PRIORITY_1);
 
-	StartTask(task1);
-	StartTask(task2);
-	Tick();
-	DelayCurrentTask(2);
-	Tick();
+    StartTask(task1);
+    StartTask(task2);
+    Tick();
+    DelayCurrentTask(1);
+    Tick();
+    Tick();
 
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(task1, CurrentTask);
-	POINTERS_EQUAL(&task2->taskList, SleepingTasks);
+    // Task2 just woke up, so it should take priority
+    CheckReadyTaskFront(task1, PRIORITY_1);
+    CheckCurrentTask(task2);
+    CheckSleepingTasks(NULL);
 }
 
+/*
+ * Check that starting a higher priority task and ticking lets it take over
+ */
 TEST(RTOS, HighPriorityTakesPrecedence)
 {
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	Task_t* task2 = makeTask(2, PRIORITY_1);
+    Task_t* task1 = makeTask(PRIORITY_1);
+    Task_t* task2 = makeTask(PRIORITY_1);
 
-	POINTERS_EQUAL(&idleTask, CurrentTask);
+    CheckCurrentTask(&idleTask);
 
-	StartTask(task1);
-	Tick();
+    StartTask(task1);
+    Tick();
 
-	POINTERS_EQUAL(task1, CurrentTask);
+    CheckCurrentTask(task1);
 
-	StartTask(task2);
-	Tick();
+    StartTask(task2);
+    Tick();
 
-	POINTERS_EQUAL(task2, CurrentTask);
+    CheckCurrentTask(task2);
 }
 
+/*
+ * Check that time-slicing works. Each tick should change which task is running
+ */
 TEST(RTOS, TimeSlicing)
 {
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	Task_t* task2 = makeTask(2, PRIORITY_1);
-	Task_t* task3 = makeTask(3, PRIORITY_1);
+    Task_t* task1 = makeTask(PRIORITY_1);
+    Task_t* task2 = makeTask(PRIORITY_1);
+    Task_t* task3 = makeTask(PRIORITY_1);
 
-	StartTask(task1);
-	StartTask(task2);
-	StartTask(task3);
-	Tick();
-	POINTERS_EQUAL(task3, CurrentTask);
-	Tick();
-	POINTERS_EQUAL(task2, CurrentTask);
-	Tick();
-	POINTERS_EQUAL(task1, CurrentTask);
+    StartTask(task1);
+    StartTask(task2);
+    StartTask(task3);
+
+    Tick();
+    CheckCurrentTask(task3);
+
+    Tick();
+    CheckCurrentTask(task2);
+
+    Tick();
+    CheckCurrentTask(task1);
 }
 
+/*
+ * Test blocking the current running task to a list
+ */
 TEST(RTOS, BlockCurrentTaskToList)
 {
-	List_t* list = NULL;
+    List_t* list = NULL;
 
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	StartTask(task1);
-	Tick();
+    Task_t* task1 = makeTask(PRIORITY_1);
+    StartTask(task1);
+    Tick();
 
-	POINTERS_EQUAL(task1, CurrentTask);
+    CheckCurrentTask(task1);
 
-	BlockCurrentTaskToList(&list);
+    BlockCurrentTaskToList(&list);
 
-	POINTERS_EQUAL(&idleTask, CurrentTask);
-	POINTERS_EQUAL(&task1->taskList, list);
+    CheckCurrentTask(&idleTask);
+    POINTERS_EQUAL(&task1->taskList, list);
 }
 
+/*
+ * Start a bunch of tasks, block them, and test that ReadyEntireList works
+ */
 TEST(RTOS, ReadyTaskEntireList)
 {
-	List_t* list = NULL;
+    List_t* list = NULL;
 
-	Task_t* task1 = makeTask(1, PRIORITY_1);
-	Task_t* task2 = makeTask(1, PRIORITY_2);
-	Task_t* task3 = makeTask(1, PRIORITY_3);
+    Task_t* task1 = makeTask(PRIORITY_1);
+    Task_t* task2 = makeTask(PRIORITY_2);
+    Task_t* task3 = makeTask(PRIORITY_3);
 
-	StartTask(task1);
-	Tick();
-	BlockCurrentTaskToList(&list);
+    StartTask(task1);
+    Tick();
+    BlockCurrentTaskToList(&list);
 
-	POINTERS_EQUAL(&task1->taskList, list);
+    POINTERS_EQUAL(&task1->taskList, list);
 
-	StartTask(task2);
-	Tick();
-	BlockCurrentTaskToList(&list);
+    StartTask(task2);
+    Tick();
+    BlockCurrentTaskToList(&list);
 
-	POINTERS_EQUAL(&task2->taskList, list);
+    POINTERS_EQUAL(&task2->taskList, list);
 
-	StartTask(task3);
-	Tick();
-	BlockCurrentTaskToList(&list);
+    StartTask(task3);
+    Tick();
+    BlockCurrentTaskToList(&list);
 
-	POINTERS_EQUAL(&task3->taskList, list);
-	POINTERS_EQUAL(&task2->taskList, task3->taskList.next);
+    POINTERS_EQUAL(&task3->taskList, list);
+    POINTERS_EQUAL(&task2->taskList, task3->taskList.next);
 
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_2]);
-	POINTERS_EQUAL(NULL, ReadyTasks[PRIORITY_3]);
+    CheckReadyTaskFront(NULL, PRIORITY_1);
+    CheckReadyTaskFront(NULL, PRIORITY_2);
+    CheckReadyTaskFront(NULL, PRIORITY_3);
 
-	ReadyTaskEntireList(&list);
+    ReadyTaskEntireList(&list);
 
-	POINTERS_EQUAL(&task1->taskList, ReadyTasks[PRIORITY_1]);
-	POINTERS_EQUAL(&task2->taskList, ReadyTasks[PRIORITY_2]);
-	POINTERS_EQUAL(&task3->taskList, ReadyTasks[PRIORITY_3]);
+    CheckReadyTaskFront(task1, PRIORITY_1);
+    CheckReadyTaskFront(task2, PRIORITY_2);
+    CheckReadyTaskFront(task3, PRIORITY_3);
 }
